@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.ipynb_checkpoints/
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# Build & Distribution
+build/
+dist/
+*.egg
+
+# LeRobot Outputs (重要！)
+outputs/
+viz_outputs/
+logs/
+*.log
+
+# Model Weights & Checkpoints
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+wandb/
+
+# Datasets (通常很大)
+data/
+datasets/
+*.hdf5
+*.parquet
+
+# Cache
+.cache/
+*.cache
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+
+# Rerun recordings
+*.rrd
+
+# Temporary
+*.tmp
+*.bak
