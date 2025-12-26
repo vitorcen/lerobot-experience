@@ -47,6 +47,9 @@ datasets/
 .idea/
 *.swp
 *~
+.claude
+CLAUDE.md
+AGENTS.md
 
 # OS
 .DS_Store

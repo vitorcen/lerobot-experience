@@ -132,7 +132,7 @@ outputs/eval/{日期}/{时间}_{任务名}/
 - ACT on Aloha: `outputs/eval/2025-12-25/09-47-14_aloha_act/videos/aloha_0_episode_3.mp4`
 - SmolVLA on LIBERO: `outputs/eval/2025-12-25/22-48-14_libero_smolvla/videos/libero_10_9_episode_2.mp4`
 
-👉 **更多演示和详细说明**: [查看演示与推理指南 (lerobot-demos.md)](./lerobot-demos.md)
+👉 **更多演示和详细说明**: [查看数据集可视化指南 (visualize_datasets.md)](./visualize_datasets.md) | [运行预训练策略指南 (run_pretrained_policy.md)](./run_pretrained_policy.md)
 
 ---
 
@@ -146,7 +146,8 @@ lerobot-experience/
 │   ├── src/lerobot/           # 核心源码
 │   ├── examples/              # 示例代码
 │   └── docs/                  # 文档
-├── lerobot-demos.md           # 演示与推理指南
+├── visualize_datasets.md      # 数据集可视化与使用指南
+├── run_pretrained_policy.md   # 运行策略指南
 └── README.md                  # 本文档
 ```
 
@@ -255,7 +256,8 @@ lerobot-info
 
 ### 本项目文档
 
-- 📖 **[演示与推理指南 (lerobot-demos.md)](./lerobot-demos.md)** - 详细的可视化、评估教程
+- 📖 **[数据集可视化指南 (visualize_datasets.md)](./visualize_datasets.md)** - 详细的数据集可视化教程
+- 📖 **[运行预训练策略 (run_pretrained_policy.md)](./run_pretrained_policy.md)** - 详细的预训练策略运行与评估教程
 
 ### 官方文档
 

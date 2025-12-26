@@ -101,6 +101,50 @@ else
     echo "✅ 'num2words' is installed."
 fi
 
+# draccus check (required for config parsing)
+if ! check_import "draccus"; then
+    echo "⚠️  'draccus' not found. Installing..."
+    pip install "draccus==0.10.0"
+else
+    echo "✅ 'draccus' is installed."
+fi
+
+# serial check (required for motors_bus)
+if ! check_import "serial"; then
+    echo "⚠️  'pyserial' not found. Installing..."
+    pip install pyserial
+else
+    echo "✅ 'pyserial' is installed."
+fi
+
+# wandb check
+if ! check_import "wandb"; then
+    echo "⚠️  'wandb' not found. Installing..."
+    pip install "wandb>=0.20.0,<0.22.0"
+else
+    echo "✅ 'wandb' is installed."
+fi
+
+# GR00T check
+# We can't easily check for 'groot' import as it's part of lerobot
+# But we can check if flash-attn is installed, which is a key dependency for GR00T
+if ! check_import "flash_attn"; then
+    echo "ℹ️  'flash_attn' not found (required for GR00T). Skipping auto-install as it requires compilation."
+    echo "   To use GR00T, run: pip install flash-attn --no-build-isolation && pip install -e './lerobot[groot]'"
+else
+    echo "✅ 'flash_attn' is installed (GR00T ready)."
+fi
+
+# GR00T check
+# We can't easily check for 'groot' import as it's part of lerobot
+# But we can check if flash-attn is installed, which is a key dependency for GR00T
+if ! check_import "flash_attn"; then
+    echo "ℹ️  'flash_attn' not found (required for GR00T). Skipping auto-install as it requires compilation."
+    echo "   To use GR00T, run: pip install flash-attn --no-build-isolation && pip install -e './lerobot[groot]'"
+else
+    echo "✅ 'flash_attn' is installed (GR00T ready)."
+fi
+
 # Pi0/Pi0.5 special check
 echo "------------------------------"
 echo "🔍 Checking configuration for Pi0/Pi0.5 models..."
