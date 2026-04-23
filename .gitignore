@@ -41,6 +41,8 @@ datasets/
 # Cache
 .cache/
 *.cache
+peek_cache/
+peek_cache_test/
 
 # IDEs & Editors
 .vscode/

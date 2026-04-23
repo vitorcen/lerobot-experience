@@ -146,6 +146,8 @@ lerobot-experience/
 │   ├── src/lerobot/           # 核心源码
 │   ├── examples/              # 示例代码
 │   └── docs/                  # 文档
+├── DATASETS.ipynb             # 数据集下载与可视化（一键运行）
+├── RUN_POLICY.ipynb           # 运行预训练策略（一键运行）
 ├── visualize_datasets.md      # 数据集可视化与使用指南
 ├── run_pretrained_policy.md   # 运行策略指南
 └── README.md                  # 本文档
@@ -256,6 +258,8 @@ lerobot-info
 
 ### 本项目文档
 
+- 📓 **[DATASETS.ipynb](./DATASETS.ipynb)** - 数据集下载与可视化（Jupyter 一键运行）
+- 📓 **[RUN_POLICY.ipynb](./RUN_POLICY.ipynb)** - 运行预训练策略评估（Jupyter 一键运行）
 - 📖 **[数据集可视化指南 (visualize_datasets.md)](./visualize_datasets.md)** - 详细的数据集可视化教程
 - 📖 **[运行预训练策略 (run_pretrained_policy.md)](./run_pretrained_policy.md)** - 详细的预训练策略运行与评估教程
 
