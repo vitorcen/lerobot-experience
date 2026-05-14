@@ -1,0 +1,426 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index dbc866a4..fd57c04e 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -212,6 +212,22 @@ aloha = ["lerobot[dataset]", "gym-aloha>=0.1.2,<0.2.0", "lerobot[scipy-dep]"]
+ pusht = ["lerobot[dataset]", "gym-pusht>=0.1.5,<0.2.0", "pymunk>=6.6.0,<7.0.0"] # TODO: Fix pymunk version in gym-pusht instead
+ libero = ["lerobot[dataset]", "lerobot[transformers-dep]", "hf-libero>=0.1.3,<0.2.0; sys_platform == 'linux'", "lerobot[scipy-dep]"]
+ metaworld = ["lerobot[dataset]", "metaworld==3.0.0", "lerobot[scipy-dep]"]
++# RoboTwin 2.0 — SAPIEN-based bimanual manipulation benchmark.
++# NOTE: curobo and pytorch3d are required at runtime but must be installed
++# manually (see RoboTwin/script/_install.sh). They are omitted here because
++# they are not available on PyPI and need --no-build-isolation.
++# NOTE: mplib is also required but omitted because 0.2.1 hard-pins numpy<2
++# which conflicts with lerobot's numpy>=2 base pin. Install it manually:
++#   pip install mplib==0.2.1 --no-deps
++robotwin = [
++    "sapien==3.0.0b1",
++    "transforms3d==0.4.2",
++    "trimesh==4.4.3",
++    "open3d>=0.18.0",
++    "pyglet<2",
++    "imageio>=2.34.0",
++    "h5py",
++]
+ # NOTE: robomme is NOT a pyproject extra — mani-skill hard-pins numpy<2
+ # which conflicts with lerobot's numpy>=2 base pin, so the two trees can't
+ # resolve into a single env. Install it only in the RoboMME Docker image
+diff --git a/src/lerobot/envs/configs.py b/src/lerobot/envs/configs.py
+index 5ce06b47..f86a0d8b 100644
+--- a/src/lerobot/envs/configs.py
++++ b/src/lerobot/envs/configs.py
+@@ -107,8 +107,21 @@ class EnvConfig(draccus.ChoiceRegistry, abc.ABC):
+                     f"Environment '{self.gym_id}' not registered even after importing '{self.package_name}'."
+                 )
+ 
++        # Capture package_name/gym_id as locals so the closure is picklable for forkserver workers.
++        package_name = self.package_name
++        gym_id = self.gym_id
++        disable_env_checker = self.disable_env_checker
++        gym_kwargs = self.gym_kwargs
++
+         def _make_one():
+-            return gym.make(self.gym_id, disable_env_checker=self.disable_env_checker, **self.gym_kwargs)
++            # forkserver children start with a fresh gymnasium import and an empty registry, so
++            # the package that registers `gym_id` must be (re-)imported inside the worker.
++            # In the parent / sync path, sys.modules makes this a no-op.
++            # Do not gate on `gym_id in gym_registry`: that reference is captured from the parent
++            # and gets pickled across to the child, where it no longer matches the child's
++            # actual gymnasium registry.
++            importlib.import_module(package_name)
++            return gym.make(gym_id, disable_env_checker=disable_env_checker, **gym_kwargs)
+ 
+         extra_kwargs: dict = {}
+         if env_cls is gym.vector.AsyncVectorEnv:
+diff --git a/src/lerobot/envs/metaworld.py b/src/lerobot/envs/metaworld.py
+index bffcf6b6..d9c8562d 100644
+--- a/src/lerobot/envs/metaworld.py
++++ b/src/lerobot/envs/metaworld.py
+@@ -75,6 +75,14 @@ ACTION_DIM = 4
+ OBS_DIM = 4
+ 
+ 
++def _normalize_task_name(task: str) -> str:
++    task_name = task.replace("metaworld-", "")
++    if task_name not in TASK_DESCRIPTIONS or task_name not in TASK_POLICY_MAPPING:
++        supported = ", ".join(sorted(TASK_DESCRIPTIONS))
++        raise ValueError(f"Unsupported Meta-World task '{task}'. Supported tasks: {supported}")
++    return task_name
++
++
+ class MetaworldEnv(gym.Env):
+     metadata = {"render_modes": ["rgb_array"], "render_fps": 80}
+ 
+@@ -90,7 +98,7 @@ class MetaworldEnv(gym.Env):
+         visualization_height=480,
+     ):
+         super().__init__()
+-        self.task = task.replace("metaworld-", "")
++        self.task = _normalize_task_name(task)
+         self.obs_type = obs_type
+         self.render_mode = render_mode
+         self.observation_width = observation_width
+@@ -319,6 +327,7 @@ def create_metaworld_envs(
+         tasks = DIFFICULTY_TO_TASKS.get(group, [group])
+ 
+         for tid, task_name in enumerate(tasks):
++            task_name = _normalize_task_name(task_name)
+             print(f"Building vec env | group={group} | task_id={tid} | task={task_name}")
+ 
+             # build n_envs factories
+diff --git a/src/lerobot/envs/robotwin.py b/src/lerobot/envs/robotwin.py
+index 823f14fa..9fe0e1b1 100644
+--- a/src/lerobot/envs/robotwin.py
++++ b/src/lerobot/envs/robotwin.py
+@@ -15,8 +15,11 @@
+ # limitations under the License.
+ from __future__ import annotations
+ 
++import contextlib
+ import importlib
++import importlib.util
+ import logging
++import os
+ from collections import defaultdict
+ from collections.abc import Callable, Sequence
+ from functools import partial
+@@ -33,6 +36,18 @@ from .utils import _LazyAsyncVectorEnv
+ 
+ logger = logging.getLogger(__name__)
+ 
++
++def _find_robotwin_root() -> str | None:
++    """Locate the RoboTwin repository root from the ``envs`` package on sys.path."""
++    spec = importlib.util.find_spec("envs")
++    if spec is None or spec.origin is None:
++        return None
++    # spec.origin is .../RoboTwin/envs/__init__.py
++    return os.path.dirname(os.path.dirname(spec.origin))
++
++
++_ROBOTWIN_ROOT: str | None = _find_robotwin_root()
++
+ # Camera names as used by RoboTwin 2.0. The wrapper appends "_rgb" when looking
+ # up keys in get_obs() output (e.g. "head_camera" → "head_camera_rgb").
+ ROBOTWIN_CAMERA_NAMES: tuple[str, ...] = (
+@@ -125,8 +140,6 @@ def _load_robotwin_setup_kwargs(task_name: str) -> dict[str, Any]:
+     if task_name in _ROBOTWIN_SETUP_CACHE:
+         return dict(_ROBOTWIN_SETUP_CACHE[task_name])
+ 
+-    import os
+-
+     import yaml  # type: ignore[import-untyped]
+     from envs import CONFIGS_PATH  # type: ignore[import-not-found]
+ 
+@@ -179,7 +192,8 @@ def _load_robotwin_task(task_name: str) -> type:
+     root and are expected to be on ``sys.path`` after installation.
+     """
+     try:
+-        module = importlib.import_module(f"envs.{task_name}")
++        with contextlib.chdir(_ROBOTWIN_ROOT) if _ROBOTWIN_ROOT else contextlib.nullcontext():
++            module = importlib.import_module(f"envs.{task_name}")
+     except ModuleNotFoundError as e:
+         raise ModuleNotFoundError(
+             f"Could not import RoboTwin task '{task_name}'. "
+@@ -284,7 +298,8 @@ class RoboTwinEnv(gym.Env):
+         if self._env is not None:
+             return
+         task_cls = _load_robotwin_task(self.task_name)
+-        self._env = task_cls()
++        with self._robotwin_cwd():
++            self._env = task_cls()
+ 
+     def _get_obs(self) -> RobotObservation:
+         assert self._env is not None, "_get_obs called before _ensure_env()"
+@@ -317,20 +332,26 @@ class RoboTwinEnv(gym.Env):
+ 
+         return {"pixels": images, "agent_pos": joint_state}
+ 
++    def _robotwin_cwd(self):
++        """Return a context manager that temporarily chdir's to RoboTwin root."""
++        if _ROBOTWIN_ROOT:
++            return contextlib.chdir(_ROBOTWIN_ROOT)
++        return contextlib.nullcontext()
++
+     def reset(self, seed: int | None = None, **kwargs) -> tuple[RobotObservation, dict]:
+         self._ensure_env()
+         super().reset(seed=seed)
+         assert self._env is not None  # set by _ensure_env() above
+ 
+-        actual_seed = self.episode_index if seed is None else seed
+-        setup_kwargs = _load_robotwin_setup_kwargs(self.task_name)
+-        setup_kwargs.update(seed=actual_seed, is_test=True)
+-        with torch.enable_grad():
+-            self._env.setup_demo(**setup_kwargs)
+-        self.episode_index += self._reset_stride
+-        self._step_count = 0
+-
+-        obs = self._get_obs()
++        with self._robotwin_cwd():
++            actual_seed = self.episode_index if seed is None else seed
++            setup_kwargs = _load_robotwin_setup_kwargs(self.task_name)
++            setup_kwargs.update(seed=actual_seed, is_test=True)
++            with torch.enable_grad():
++                self._env.setup_demo(**setup_kwargs)
++            self.episode_index += self._reset_stride
++            self._step_count = 0
++            obs = self._get_obs()
+         return obs, {"is_success": False, "task": self.task_name}
+ 
+     def step(self, action: np.ndarray) -> tuple[RobotObservation, float, bool, bool, dict[str, Any]]:
+@@ -338,7 +359,7 @@ class RoboTwinEnv(gym.Env):
+         if action.ndim != 1 or action.shape[0] != ACTION_DIM:
+             raise ValueError(f"Expected 1-D action of shape ({ACTION_DIM},), got {action.shape}")
+ 
+-        with torch.enable_grad():
++        with self._robotwin_cwd(), torch.enable_grad():
+             if hasattr(self._env, "take_action"):
+                 self._env.take_action(action)
+             else:
+@@ -350,7 +371,8 @@ class RoboTwinEnv(gym.Env):
+         if not is_success and hasattr(self._env, "check_success"):
+             is_success = bool(self._env.check_success())
+ 
+-        obs = self._get_obs()
++        with self._robotwin_cwd():
++            obs = self._get_obs()
+         reward = float(is_success)
+         terminated = is_success
+         truncated = self._step_count >= self.episode_length
+diff --git a/src/lerobot/envs/utils.py b/src/lerobot/envs/utils.py
+index 6e6f352e..84106e3a 100644
+--- a/src/lerobot/envs/utils.py
++++ b/src/lerobot/envs/utils.py
+@@ -224,6 +224,12 @@ def check_env_attributes_and_types(env: gym.vector.VectorEnv) -> None:
+     with warnings.catch_warnings():
+         warnings.simplefilter("once", UserWarning)
+ 
++        # AsyncVectorEnv shuts down a worker permanently whenever get_attr/call raises, so
++        # probing optional attributes here would brick the rollout for envs like PushT that
++        # lack them. Skip the check on Async; downstream code handles missing task info.
++        if isinstance(env, gym.vector.AsyncVectorEnv):
++            return
++
+         if not (_sub_env_has_attr(env, "task_description") and _sub_env_has_attr(env, "task")):
+             warnings.warn(
+                 "The environment does not have 'task_description' and 'task'. Some policies require these features.",
+diff --git a/src/lerobot/policies/factory.py b/src/lerobot/policies/factory.py
+index 611a6e9b..7b920be4 100644
+--- a/src/lerobot/policies/factory.py
++++ b/src/lerobot/policies/factory.py
+@@ -62,6 +62,61 @@ from .wall_x.configuration_wall_x import WallXConfig
+ from .xvla.configuration_xvla import XVLAConfig
+ 
+ 
++def _extract_legacy_norm_stats(
++    pretrained_path: str,
++    policy_cfg: PreTrainedConfig,
++) -> dict[str, dict[str, torch.Tensor]] | None:
++    """Reconstruct dataset_stats from normalize_* buffers baked into a legacy model.safetensors.
++
++    Older lerobot checkpoints (e.g. lerobot/diffusion_pusht) carry normalization params inside
++    the policy state dict under keys like `normalize_inputs.buffer_observation_image.mean`.
++    Newer code expects an external policy_preprocessor.json. When that file is missing on the
++    Hub, we materialize stats from these legacy buffers so a fresh processor can be built.
++
++    Returns None if no legacy buffers are found.
++    """
++    from pathlib import Path
++
++    from huggingface_hub import hf_hub_download
++    from safetensors import safe_open
++
++    model_path = Path(pretrained_path)
++    if model_path.is_dir():
++        st_path = model_path / "model.safetensors"
++        if not st_path.exists():
++            return None
++        st_path = str(st_path)
++    else:
++        try:
++            st_path = hf_hub_download(repo_id=str(pretrained_path), filename="model.safetensors")
++        except Exception:
++            return None
++
++    feature_names = list({**policy_cfg.input_features, **policy_cfg.output_features}.keys())
++    # Legacy code keyed buffers by feature name with dots replaced by underscores.
++    feat_by_buffer = {name.replace(".", "_"): name for name in feature_names}
++
++    stats: dict[str, dict[str, torch.Tensor]] = {}
++    with safe_open(st_path, framework="pt") as f:
++        for key in f.keys():
++            parts = key.split(".")
++            # Match `<normalize_inputs|normalize_targets|unnormalize_outputs>.buffer_<feat>.<stat>`
++            if len(parts) != 3 or not parts[1].startswith("buffer_"):
++                continue
++            if parts[0] not in {"normalize_inputs", "normalize_targets", "unnormalize_outputs"}:
++                continue
++            stat_name = parts[2]
++            if stat_name not in {"mean", "std", "min", "max"}:
++                continue
++            buffer_feat = parts[1][len("buffer_") :]
++            feat = feat_by_buffer.get(buffer_feat)
++            if feat is None:
++                continue
++            stats.setdefault(feat, {})[stat_name] = f.get_tensor(key)
++
++    return stats or None
++
++
+ def _reconnect_relative_absolute_steps(
+     preprocessor: PolicyProcessorPipeline, postprocessor: PolicyProcessorPipeline
+ ) -> None:
+@@ -290,26 +345,43 @@ def make_pre_post_processors(
+             kwargs["preprocessor_overrides"] = preprocessor_overrides
+             kwargs["postprocessor_overrides"] = postprocessor_overrides
+ 
+-        preprocessor = PolicyProcessorPipeline.from_pretrained(
+-            pretrained_model_name_or_path=pretrained_path,
+-            config_filename=kwargs.get(
+-                "preprocessor_config_filename", f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
+-            ),
+-            overrides=kwargs.get("preprocessor_overrides", {}),
+-            to_transition=batch_to_transition,
+-            to_output=transition_to_batch,
+-        )
+-        postprocessor = PolicyProcessorPipeline.from_pretrained(
+-            pretrained_model_name_or_path=pretrained_path,
+-            config_filename=kwargs.get(
+-                "postprocessor_config_filename", f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
+-            ),
+-            overrides=kwargs.get("postprocessor_overrides", {}),
+-            to_transition=policy_action_to_transition,
+-            to_output=transition_to_policy_action,
+-        )
+-        _reconnect_relative_absolute_steps(preprocessor, postprocessor)
+-        return preprocessor, postprocessor
++        try:
++            preprocessor = PolicyProcessorPipeline.from_pretrained(
++                pretrained_model_name_or_path=pretrained_path,
++                config_filename=kwargs.get(
++                    "preprocessor_config_filename", f"{POLICY_PREPROCESSOR_DEFAULT_NAME}.json"
++                ),
++                overrides=kwargs.get("preprocessor_overrides", {}),
++                to_transition=batch_to_transition,
++                to_output=transition_to_batch,
++            )
++            postprocessor = PolicyProcessorPipeline.from_pretrained(
++                pretrained_model_name_or_path=pretrained_path,
++                config_filename=kwargs.get(
++                    "postprocessor_config_filename", f"{POLICY_POSTPROCESSOR_DEFAULT_NAME}.json"
++                ),
++                overrides=kwargs.get("postprocessor_overrides", {}),
++                to_transition=policy_action_to_transition,
++                to_output=transition_to_policy_action,
++            )
++            _reconnect_relative_absolute_steps(preprocessor, postprocessor)
++            return preprocessor, postprocessor
++        except FileNotFoundError:
++            # Legacy checkpoints (e.g. lerobot/diffusion_pusht) baked normalization into the
++            # model state dict and never shipped a policy_preprocessor.json. Recover by
++            # extracting the legacy buffers into dataset_stats and falling through to the
++            # fresh-processor construction below.
++            legacy_stats = _extract_legacy_norm_stats(pretrained_path, policy_cfg)
++            if legacy_stats is None:
++                raise
++            logging.warning(
++                "Hub repo '%s' lacks processor configs; reconstructing processors from legacy "
++                "normalize buffers in model.safetensors.",
++                pretrained_path,
++            )
++            if kwargs.get("dataset_stats") is None:
++                kwargs["dataset_stats"] = legacy_stats
++            # Fall through to fresh-processor construction below.
+ 
+     # Create a new processor based on policy type
+     if isinstance(policy_cfg, TDMPCConfig):
+diff --git a/src/lerobot/scripts/lerobot_eval.py b/src/lerobot/scripts/lerobot_eval.py
+index d45483d2..97b52fa9 100644
+--- a/src/lerobot/scripts/lerobot_eval.py
++++ b/src/lerobot/scripts/lerobot_eval.py
+@@ -162,21 +162,30 @@ def rollout(
+         leave=False,
+     )
+     check_env_attributes_and_types(env)
++
++    # Resolve task descriptions once. AsyncVectorEnv shuts down a worker permanently on any failed
++    # call(), so probing `task_description`/`task` per-step (or even once on Async) would break the
++    # next env.step(). For Async we therefore use empty strings unless a Sync probe succeeds.
++    if isinstance(env, gym.vector.SyncVectorEnv):
++        try:
++            cached_task = list(env.call("task_description"))
++        except (AttributeError, NotImplementedError):
++            try:
++                cached_task = list(env.call("task"))
++            except (AttributeError, NotImplementedError):
++                cached_task = [""] * env.num_envs
++    else:
++        cached_task = [""] * env.num_envs
++
+     while not np.all(done) and step < max_steps:
+         # Numpy array to tensor and changing dictionary keys to LeRobot policy format.
+         observation = preprocess_observation(observation)
+         if return_observations:
+             all_observations.append(deepcopy(observation))
+ 
+-        # Infer "task" from sub-environments (prefer natural language description).
+-        # env.call() works with both SyncVectorEnv and AsyncVectorEnv.
+-        try:
+-            observation["task"] = list(env.call("task_description"))
+-        except (AttributeError, NotImplementedError):
+-            try:
+-                observation["task"] = list(env.call("task"))
+-            except (AttributeError, NotImplementedError):
+-                observation["task"] = [""] * env.num_envs
++        # Use the task descriptions cached before the rollout loop. Re-calling env.call() here
++        # would shut down AsyncVectorEnv workers on the first miss.
++        observation["task"] = list(cached_task)
+ 
+         # Apply environment-specific preprocessing (e.g., LiberoProcessorStep for LIBERO)
+         observation = env_preprocessor(observation)
+@@ -324,12 +333,23 @@ def eval_policy(
+         if n_episodes_rendered >= max_episodes_rendered:
+             return
+         n_to_render_now = min(max_episodes_rendered - n_episodes_rendered, env.num_envs)
++        frames = []
+         if isinstance(env, gym.vector.SyncVectorEnv):
+-            ep_frames.append(np.stack([env.envs[i].render() for i in range(n_to_render_now)]))  # noqa: B023
++            frames = [env.envs[i].render() for i in range(n_to_render_now)]
++            ep_frames.append(np.stack(frames))  # noqa: B023
+         elif hasattr(env, "call"):
+             # Here we must render all frames and discard any we don't need.
+             # Covers AsyncVectorEnv and _LazyAsyncVectorEnv (which wraps one).
+-            ep_frames.append(np.stack(env.call("render")[:n_to_render_now]))
++            frames = env.call("render")[:n_to_render_now]
++            ep_frames.append(np.stack(frames))
++        # Realtime preview window (first env only)
++        if frames:
++            try:
++                import cv2
++                cv2.imshow("LeRobot Eval", cv2.cvtColor(frames[0], cv2.COLOR_RGB2BGR))
++                cv2.waitKey(1)
++            except Exception:
++                pass
+ 
+     if max_episodes_rendered > 0:
+         video_paths: list[str] = []
